@@ -69,7 +69,7 @@ function extractBody(raw: string): string {
 
 async function fetchEmails(inbox: string): Promise<Email[]> {
   const url = `${BASE_URL}/api/inbox/${encodeURIComponent(inboxName(inbox))}?source=mcp`;
-  const headers: Record<string, string> = { "User-Agent": "zerodrop-mcp/0.1.0" };
+  const headers: Record<string, string> = { "User-Agent": "zerodrop-mcp/0.1.1" };
   if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
 
   const res = await fetch(url, { headers });
@@ -126,7 +126,7 @@ function emailToText(email: Email): string {
 
 const server = new McpServer({
   name: "zerodrop",
-  version: "0.1.0",
+  version: "0.1.1",
 });
 
 server.tool(
