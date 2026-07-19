@@ -1,0 +1,61 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Build & Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke test — server starts and lists tools
+        run: |
+          node - << 'SMOKE'
+          const { spawn } = require("child_process");
+
+          const proc = spawn("node", ["dist/index.js"], { stdio: ["pipe", "pipe", "inherit"] });
+          let buf = "";
+          let done = false;
+
+          proc.stdout.on("data", (d) => {
+            buf += d.toString();
+            for (const line of buf.split("\n")) {
+              if (!line.trim()) continue;
+              try {
+                const msg = JSON.parse(line);
+                if (msg.id === 2 && msg.result && msg.result.tools) {
+                  const names = msg.result.tools.map((t) => t.name).sort();
+                  console.log("tools:", names.join(", "));
+                  const expected = ["check_inbox", "generate_inbox", "wait_for_email"];
+                  if (JSON.stringify(names) !== JSON.stringify(expected)) {
+                    console.error("unexpected tool list");
+                    process.exit(1);
+                  }
+                  done = true;
+                  proc.kill();
+                  process.exit(0);
+                }
+              } catch {}
+            }
+          });
+
+          const init = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "smoke", version: "0" } } };
+          const initialized = { jsonrpc: "2.0", method: "notifications/initialized" };
+          const list = { jsonrpc: "2.0", id: 2, method: "tools/list" };
+
+          proc.stdin.write(JSON.stringify(init) + "\n");
+          setTimeout(() => proc.stdin.write(JSON.stringify(initialized) + "\n"), 300);
+          setTimeout(() => proc.stdin.write(JSON.stringify(list) + "\n"), 600);
+          setTimeout(() => { if (!done) { console.error("timeout waiting for tools/list"); proc.kill(); process.exit(1); } }, 10000);
+          SMOKE
