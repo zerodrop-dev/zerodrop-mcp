@@ -7,7 +7,9 @@
  *   - wait for emails and read auto-extracted OTPs and magic links
  *
  * Free sandbox mode by default — no API key, no signup.
- * Set ZERODROP_API_KEY for Workspaces, ZERODROP_BASE_URL for self-hosted.
+ * Set ZERODROP_API_KEY (free from https://zerodrop.dev/keys) for private
+ * inboxes: names then start with the key's prefix and only that key can read
+ * them. ZERODROP_BASE_URL points at a self-hosted instance.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -15,11 +17,32 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { randomInt } from "node:crypto";
 
+const VERSION = "0.2.0";
 const BASE_URL = (process.env.ZERODROP_BASE_URL || "https://zerodrop.dev").replace(/\/+$/, "");
-const API_KEY = process.env.ZERODROP_API_KEY || "";
+const API_KEY = (process.env.ZERODROP_API_KEY || "").trim();
 const FREE_DOMAIN = "zerodrop-sandbox.online";
 const ADJECTIVES = ["swift", "dark", "cold", "null", "void", "zero", "dead", "raw", "base", "core"];
 const ALPHANUM = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+// A free key from https://zerodrop.dev/keys is zd_<prefix>_<32 letters/digits>.
+// Inboxes named <prefix>-... can be read only with that key.
+const KEY_PREFIX = /^zd_([a-z0-9]{4})_[A-Za-z0-9]{32}$/.exec(API_KEY)?.[1] ?? null;
+
+// The key goes into an HTTP header, so after trimming it may hold only
+// visible ASCII. Anything else stops the server, without echoing the key.
+if (/[^\x21-\x7e]/.test(API_KEY)) {
+  console.error(
+    "zerodrop-mcp: ZERODROP_API_KEY contains a character that can't be sent in an HTTP header, " +
+      "such as a line break. Copy it again from https://zerodrop.dev/keys."
+  );
+  process.exit(1);
+}
+
+// Account prefixes are 4 letters/digits with at least one of each. A name of
+// that shape at the start belongs to whichever account owns the prefix.
+function looksLikeAccountPrefix(segment: string): boolean {
+  return /^[a-z0-9]{4}$/.test(segment) && /[a-z]/.test(segment) && /[0-9]/.test(segment);
+}
 
 // ---------------------------------------------------------------------------
 // Minimal ZeroDrop client (inline so requests are tagged ?source=mcp)
@@ -45,11 +68,28 @@ interface Email {
 }
 
 function generateInboxAddress(prefix?: string): string {
-  const clean = (prefix || "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 20);
+  const clean = (prefix || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/^-+/, "")
+    .slice(0, 20)
+    .replace(/-+$/, "");
   const adjective = ADJECTIVES[randomInt(ADJECTIVES.length)];
   let suffix = "";
   for (let i = 0; i < 7; i++) suffix += ALPHANUM[randomInt(ALPHANUM.length)];
-  const name = clean ? `${clean}-${adjective}-${suffix}` : `${adjective}-${suffix}`;
+
+  // With a key, the key's prefix goes first, so the inbox is private.
+  // Without one, a caller's prefix that starts like an account prefix
+  // (app1, app1-web) moves behind the adjective, so the inbox can't land
+  // under someone's account.
+  let name: string;
+  if (KEY_PREFIX) {
+    name = clean ? `${KEY_PREFIX}-${clean}-${adjective}-${suffix}` : `${KEY_PREFIX}-${adjective}-${suffix}`;
+  } else if (clean && looksLikeAccountPrefix(clean.split("-")[0])) {
+    name = `${adjective}-${clean}-${suffix}`;
+  } else {
+    name = clean ? `${clean}-${adjective}-${suffix}` : `${adjective}-${suffix}`;
+  }
   return `${name}@${FREE_DOMAIN}`;
 }
 
@@ -69,11 +109,20 @@ function extractBody(raw: string): string {
 
 async function fetchEmails(inbox: string): Promise<Email[]> {
   const url = `${BASE_URL}/api/inbox/${encodeURIComponent(inboxName(inbox))}?source=mcp`;
-  const headers: Record<string, string> = { "User-Agent": "zerodrop-mcp/0.1.1" };
+  const headers: Record<string, string> = { "User-Agent": `zerodrop-mcp/${VERSION}` };
   if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
 
   const res = await fetch(url, { headers });
-  if (res.status === 401) throw new Error("Invalid ZERODROP_API_KEY");
+  if (res.status === 401) {
+    // The server says why: usually that the inbox belongs to another key.
+    const reason = await res.json().then((b: { error?: unknown }) => b?.error, () => null);
+    if (typeof reason === "string") throw new Error(reason);
+    throw new Error(
+      API_KEY
+        ? "ZeroDrop refused ZERODROP_API_KEY for this inbox (401)."
+        : "This inbox can be read only with its account's API key (401). Set ZERODROP_API_KEY."
+    );
+  }
   if (!res.ok) throw new Error(`ZeroDrop API returned ${res.status}`);
 
   const payload = (await res.json()) as { emails?: RawEmail[] };
@@ -126,14 +175,15 @@ function emailToText(email: Email): string {
 
 const server = new McpServer({
   name: "zerodrop",
-  version: "0.1.1",
+  version: VERSION,
 });
 
 server.tool(
   "generate_inbox",
   "Generate a disposable email inbox for testing signups, OTP verification, magic links, and password resets. " +
     "Instant and local — no network request. Use the returned address wherever an email is required, " +
-    "then call wait_for_email to read what arrives. Free tier: 30-minute retention, no signup needed.",
+    "then call wait_for_email to read what arrives. Free tier: 30-minute retention, no signup needed. " +
+    "With a key from zerodrop.dev/keys in ZERODROP_API_KEY, the name starts with the key's prefix and only that key can read the inbox.",
   {
     prefix: z
       .string()
@@ -149,8 +199,8 @@ server.tool(
           text: JSON.stringify(
             {
               inbox,
-              watch_url: `${BASE_URL}/inbox/${inboxName(inbox)}`,
               note: "Emails to this address are caught at Cloudflare's edge. OTPs and magic links are auto-extracted.",
+              private: KEY_PREFIX !== null,
             },
             null,
             2
@@ -254,4 +304,6 @@ server.tool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error(`zerodrop-mcp ready (${API_KEY ? "workspace" : "free sandbox"} mode, ${BASE_URL})`);
+console.error(
+  `zerodrop-mcp ${VERSION} ready (${KEY_PREFIX ? `key prefix ${KEY_PREFIX}` : API_KEY ? "API key without a prefix" : "no API key: inboxes are public"}, ${BASE_URL})`
+);

@@ -70,7 +70,7 @@ Creates a disposable email address. Local and instant — no network request.
 |---|---|---|
 | `prefix` | string, optional | Prefix for the inbox name, e.g. your app name |
 
-Returns the inbox address and a live watch URL.
+Returns the inbox address. With a key from [zerodrop.dev/keys](https://zerodrop.dev/keys) in `ZERODROP_API_KEY`, the name starts with your key's prefix (`k7x2-myapp-swift-x7k29ab`) and only your key can read it. Without one, a prefix whose part before the first hyphen is four letters and digits, at least one of each (`app1`, `app1-web`), goes after the adjective instead (`swift-app1-web-x7k29ab`), so the inbox can't fall under someone's account.
 
 ### `wait_for_email`
 
@@ -119,7 +119,7 @@ Environment variables (set in your MCP client config):
 
 | Variable | Default | Description |
 |---|---|---|
-| `ZERODROP_API_KEY` | — | [Workspace](https://zerodrop.dev/pricing) key. Omit for free sandbox mode. |
+| `ZERODROP_API_KEY` | — | Free key from [zerodrop.dev/keys](https://zerodrop.dev/keys). Inbox names then start with your key's prefix and only your key can read them. Omit for public sandbox inboxes. |
 | `ZERODROP_BASE_URL` | `https://zerodrop.dev` | Self-hosted instance URL |
 
 ```json

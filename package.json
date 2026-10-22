@@ -1,6 +1,6 @@
 {
   "name": "zerodrop-mcp",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "mcpName": "dev.zerodrop/zerodrop-mcp",
   "description": "MCP server for ZeroDrop \u2014 gives AI agents disposable email inboxes with auto-extracted OTPs and magic links. Verify signups, test auth flows, no Docker, no signup.",
   "type": "module",

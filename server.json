@@ -3,7 +3,7 @@
   "name": "dev.zerodrop/zerodrop-mcp",
   "title": "ZeroDrop",
   "description": "Disposable email inboxes for AI agents — OTPs and magic links auto-extracted. No signup needed.",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "repository": {
     "url": "https://github.com/zerodrop-dev/zerodrop-mcp",
     "source": "github"
@@ -13,14 +13,14 @@
     {
       "registryType": "npm",
       "identifier": "zerodrop-mcp",
-      "version": "0.1.2",
+      "version": "0.2.0",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "ZERODROP_API_KEY",
-          "description": "ZeroDrop Workspace API key. Omit for free sandbox mode.",
+          "description": "Free API key from https://zerodrop.dev/keys. Inbox names then start with your key's prefix and only your key can read them. Omit for public sandbox inboxes.",
           "isRequired": false,
           "isSecret": true
         },
