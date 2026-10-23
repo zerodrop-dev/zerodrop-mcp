@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
   "name": "dev.zerodrop/zerodrop-mcp",
   "title": "ZeroDrop",
-  "description": "Disposable email inboxes for AI agents — OTPs and magic links auto-extracted. No signup needed.",
-  "version": "0.2.0",
+  "description": "Disposable email inboxes for AI agents — OTPs and magic links auto-extracted. No signup to try.",
+  "version": "0.3.0",
   "repository": {
     "url": "https://github.com/zerodrop-dev/zerodrop-mcp",
     "source": "github"
@@ -13,14 +13,14 @@
     {
       "registryType": "npm",
       "identifier": "zerodrop-mcp",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "ZERODROP_API_KEY",
-          "description": "Free API key from https://zerodrop.dev/keys. Inbox names then start with your key's prefix and only your key can read them. Omit for public sandbox inboxes.",
+          "description": "Free API key from https://zerodrop.dev/keys. Inbox names then start with your key's prefix, only your key can read them, and mail to them isn't limited. Without it, inboxes are public and one sender can reach 5 different inboxes a day.",
           "isRequired": false,
           "isSecret": true
         },

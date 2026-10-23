@@ -17,7 +17,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { randomInt } from "node:crypto";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const BASE_URL = (process.env.ZERODROP_BASE_URL || "https://zerodrop.dev").replace(/\/+$/, "");
 const API_KEY = (process.env.ZERODROP_API_KEY || "").trim();
 const FREE_DOMAIN = "zerodrop-sandbox.online";
@@ -56,7 +56,20 @@ interface RawEmail {
   receivedAt?: string;
   otp?: string;
   magicLink?: string;
+  held?: unknown;   // true on a notice that ZeroDrop held the email
+  reason?: unknown; // the notice's explanation, on one line
 }
+
+// Without an API key, one sender can reach only a few different inboxes a
+// day; past that, ZeroDrop holds the email and leaves a notice in the inbox.
+interface Notice {
+  receivedAt: string;
+  message: string;
+}
+
+const HELD_DEFAULT =
+  "ZeroDrop held the email sent to this inbox: without an API key, one sender can reach only a few " +
+  "different inboxes a day. Get a free key at https://zerodrop.dev/keys and set ZERODROP_API_KEY.";
 
 interface Email {
   from: string;
@@ -107,7 +120,9 @@ function extractBody(raw: string): string {
   return "";
 }
 
-async function fetchEmails(inbox: string): Promise<Email[]> {
+// The inbox's emails, newest first, and its notices of held mail apart: a
+// notice is never presented as an email.
+async function fetchEmails(inbox: string): Promise<{ emails: Email[]; notices: Notice[] }> {
   const url = `${BASE_URL}/api/inbox/${encodeURIComponent(inboxName(inbox))}?source=mcp`;
   const headers: Record<string, string> = { "User-Agent": `zerodrop-mcp/${VERSION}` };
   if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
@@ -126,14 +141,25 @@ async function fetchEmails(inbox: string): Promise<Email[]> {
   if (!res.ok) throw new Error(`ZeroDrop API returned ${res.status}`);
 
   const payload = (await res.json()) as { emails?: RawEmail[] };
-  return (payload.emails || []).map((r) => ({
-    from: r.from || "",
-    subject: r.subject || "",
-    receivedAt: r.receivedAt || "",
-    otp: r.otp || null,
-    magicLink: r.magicLink || null,
-    body: extractBody(r.raw || ""),
-  }));
+  const items = payload.emails || [];
+  return {
+    emails: items
+      .filter((r) => r.held !== true)
+      .map((r) => ({
+        from: r.from || "",
+        subject: r.subject || "",
+        receivedAt: r.receivedAt || "",
+        otp: r.otp || null,
+        magicLink: r.magicLink || null,
+        body: extractBody(r.raw || ""),
+      })),
+    notices: items
+      .filter((r) => r.held === true)
+      .map((r) => ({
+        receivedAt: r.receivedAt || "",
+        message: (typeof r.reason === "string" && r.reason.trim()) || HELD_DEFAULT,
+      })),
+  };
 }
 
 interface EmailFilter {
@@ -215,6 +241,8 @@ server.tool(
   "wait_for_email",
   "Wait for an email to arrive in a ZeroDrop inbox and return it with the OTP and magic link already extracted — " +
     "no parsing needed. Blocks until an email matching the filters arrives or the timeout is reached. " +
+    "If ZeroDrop held the email instead (without an API key, one sender can reach only a few different inboxes a day), " +
+    "returns at once with error \"held\" and the reason. " +
     "Use after triggering a signup, login, or password-reset flow.",
   {
     inbox: z.string().describe("The inbox address (or name) returned by generate_inbox"),
@@ -235,10 +263,18 @@ server.tool(
     const deadline = Date.now() + timeoutMs;
 
     while (true) {
-      const emails = await fetchEmails(inbox);
+      const { emails, notices } = await fetchEmails(inbox);
       const match = emails.find((e) => matches(e, filter));
       if (match) {
         return { content: [{ type: "text", text: emailToText(match) }] };
+      }
+      // Nothing matches, and ZeroDrop held mail for this inbox: say why now
+      // rather than wait for the timeout.
+      if (notices.length > 0) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: "held", message: notices[0].message }) }],
+          isError: true,
+        };
       }
       if (Date.now() + 2000 > deadline) {
         return {
@@ -262,13 +298,14 @@ server.tool(
 server.tool(
   "check_inbox",
   "Check a ZeroDrop inbox right now without waiting. Returns the most recent emails with OTPs and magic links " +
-    "already extracted, or an empty list if nothing has arrived yet.",
+    "already extracted, or an empty list if nothing has arrived yet. A notice that ZeroDrop held an email " +
+    "is listed as { held: true, message }.",
   {
     inbox: z.string().describe("The inbox address (or name) returned by generate_inbox"),
   },
   async ({ inbox }) => {
-    const emails = await fetchEmails(inbox);
-    if (emails.length === 0) {
+    const { emails, notices } = await fetchEmails(inbox);
+    if (emails.length === 0 && notices.length === 0) {
       return {
         content: [
           {
@@ -278,22 +315,23 @@ server.tool(
         ],
       };
     }
+    const items: Array<Record<string, unknown> & { received_at: string }> = [
+      ...emails.map((e) => ({
+        from: e.from,
+        subject: e.subject,
+        received_at: e.receivedAt,
+        otp: e.otp,
+        magic_link: e.magicLink,
+        body_preview: e.body.slice(0, 300),
+      })),
+      ...notices.map((n) => ({ held: true, received_at: n.receivedAt, message: n.message })),
+    ];
+    items.sort((a, b) => b.received_at.localeCompare(a.received_at)); // newest first
     return {
       content: [
         {
           type: "text",
-          text: JSON.stringify(
-            emails.slice(0, 5).map((e) => ({
-              from: e.from,
-              subject: e.subject,
-              received_at: e.receivedAt,
-              otp: e.otp,
-              magic_link: e.magicLink,
-              body_preview: e.body.slice(0, 300),
-            })),
-            null,
-            2
-          ),
+          text: JSON.stringify(items.slice(0, 5), null, 2),
         },
       ],
     };
