@@ -9,7 +9,8 @@
  * Free sandbox mode by default — no API key, no signup.
  * Set ZERODROP_API_KEY (free from https://zerodrop.dev/keys) for private
  * inboxes: names then start with the key's prefix and only that key can read
- * them. ZERODROP_BASE_URL points at a self-hosted instance.
+ * them. ZERODROP_DOMAIN is a Workspace's own domain, for addresses on it.
+ * ZERODROP_BASE_URL points at a self-hosted instance.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -17,10 +18,24 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { randomInt } from "node:crypto";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const BASE_URL = (process.env.ZERODROP_BASE_URL || "https://zerodrop.dev").replace(/\/+$/, "");
 const API_KEY = (process.env.ZERODROP_API_KEY || "").trim();
 const FREE_DOMAIN = "zerodrop-sandbox.online";
+const HOST_NAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/;
+
+// A Workspace's own domain, from ZERODROP_DOMAIN; otherwise the shared one.
+// A value that isn't a domain name stops the server.
+const DOMAIN = (() => {
+  const value = (process.env.ZERODROP_DOMAIN || "").trim();
+  if (!value) return FREE_DOMAIN;
+  const domain = value.toLowerCase().replace(/\.$/, "");
+  if (!HOST_NAME.test(domain)) {
+    console.error("zerodrop-mcp: ZERODROP_DOMAIN isn't a domain name. Use your Workspace's domain, such as yourcompany-qa.com.");
+    process.exit(1);
+  }
+  return domain;
+})();
 const ADJECTIVES = ["swift", "dark", "cold", "null", "void", "zero", "dead", "raw", "base", "core"];
 const ALPHANUM = "abcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -103,12 +118,18 @@ function generateInboxAddress(prefix?: string): string {
   } else {
     name = clean ? `${clean}-${adjective}-${suffix}` : `${adjective}-${suffix}`;
   }
-  return `${name}@${FREE_DOMAIN}`;
+  return `${name}@${DOMAIN}`;
 }
 
+// The inbox an address is read from: its local part. On a Workspace's own
+// domain, mail is filed under the key's prefix, so an address named by hand,
+// such as qa@yourcompany-qa.com, is read as k7x2-qa.
 function inboxName(inbox: string): string {
-  const name = inbox.includes("@") ? inbox.split("@")[0] : inbox;
-  return name.toLowerCase();
+  const name = (inbox.includes("@") ? inbox.split("@")[0] : inbox).toLowerCase();
+  if (!inbox.includes("@") || !KEY_PREFIX || DOMAIN === FREE_DOMAIN) return name;
+  const domain = inbox.split("@").pop()!.toLowerCase().replace(/\.$/, "");
+  if (domain !== DOMAIN || name.startsWith(`${KEY_PREFIX}-`)) return name;
+  return `${KEY_PREFIX}-${name}`;
 }
 
 function extractBody(raw: string): string {
@@ -343,5 +364,11 @@ server.tool(
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error(
-  `zerodrop-mcp ${VERSION} ready (${KEY_PREFIX ? `key prefix ${KEY_PREFIX}` : API_KEY ? "API key without a prefix" : "no API key: inboxes are public"}, ${BASE_URL})`
+  `zerodrop-mcp ${VERSION} ready (${KEY_PREFIX ? `key prefix ${KEY_PREFIX}` : API_KEY ? "API key without a prefix" : "no API key: inboxes are public"}, ${DOMAIN}, ${BASE_URL})`
 );
+if (DOMAIN !== FREE_DOMAIN && !KEY_PREFIX) {
+  console.error(
+    `zerodrop-mcp: inboxes on ${DOMAIN} belong to your Workspace and can be read only with its API key ` +
+      "(zd_xxxx_… from https://zerodrop.dev/keys). Set ZERODROP_API_KEY."
+  );
+}

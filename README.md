@@ -125,6 +125,7 @@ Environment variables (set in your MCP client config):
 | Variable | Default | Description |
 |---|---|---|
 | `ZERODROP_API_KEY` | — | Free key from [zerodrop.dev/keys](https://zerodrop.dev/keys). Inbox names then start with your key's prefix, only your key can read them, and mail to them isn't limited. Without it, inboxes are public and one sender can reach 5 different inboxes a day; past that, the inbox gets a notice from `notice@zerodrop.dev` instead of the email. |
+| `ZERODROP_DOMAIN` | `zerodrop-sandbox.online` | Your Workspace's own domain, such as `yourcompany-qa.com`. Generated inboxes use it, and every inbox on it can be read only with your key, so set `ZERODROP_API_KEY` too. An address named by hand on it (`qa@yourcompany-qa.com`) is read from your key's prefix, where ZeroDrop files it. 0.4.0 or later |
 | `ZERODROP_BASE_URL` | `https://zerodrop.dev` | Self-hosted instance URL |
 
 ```json
