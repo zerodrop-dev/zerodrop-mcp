@@ -18,7 +18,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { randomInt } from "node:crypto";
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.1";
 const BASE_URL = (process.env.ZERODROP_BASE_URL || "https://zerodrop.dev").replace(/\/+$/, "");
 const API_KEY = (process.env.ZERODROP_API_KEY || "").trim();
 const FREE_DOMAIN = "zerodrop-sandbox.online";
