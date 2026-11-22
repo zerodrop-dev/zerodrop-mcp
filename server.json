@@ -3,7 +3,7 @@
   "name": "dev.zerodrop/zerodrop-mcp",
   "title": "ZeroDrop",
   "description": "Disposable email inboxes for AI agents — OTPs and magic links auto-extracted. No signup to try.",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "repository": {
     "url": "https://github.com/zerodrop-dev/zerodrop-mcp",
     "source": "github"
@@ -13,16 +13,28 @@
     {
       "registryType": "npm",
       "identifier": "zerodrop-mcp",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "ZERODROP_API_KEY",
-          "description": "Free API key from https://zerodrop.dev/keys. Inbox names then start with your key's prefix, only your key can read them, and mail to them isn't limited. Without it, inboxes are public and one sender can reach 5 different inboxes a day.",
+          "description": "Free API key from https://zerodrop.dev/keys. Inbox names then start with your key's prefix, only your key can read them, and the 5-inbox limit doesn't apply to them (your account can receive up to 300 emails a day). Without it, inboxes are public and one sender can reach 5 different inboxes a day.",
           "isRequired": false,
           "isSecret": true
+        },
+        {
+          "name": "ZERODROP_DOMAIN",
+          "description": "Your Workspace's own domain, such as yourcompany-qa.com. Generated inboxes use it; set ZERODROP_API_KEY too.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "ZERODROP_BODIES",
+          "description": "Set to off to keep email bodies from the agent, even when it passes include_body. Bodies are left out by default either way.",
+          "isRequired": false,
+          "isSecret": false
         },
         {
           "name": "ZERODROP_BASE_URL",
