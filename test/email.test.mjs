@@ -9,8 +9,10 @@ import {
   WITHHELD_NOTE,
   authState,
   bodiesAllowed,
+  cleanBody,
   cleanSubject,
   emailView,
+  extractBody,
   hostMatches,
   matchesFilter,
   meetsExpectations,
@@ -35,7 +37,7 @@ const stored = (over = {}) => ({
   fromAddress: "noreply@app.example.com",
   subject: "Your verification code",
   receivedAt: "2026-11-22T00:00:00.000Z",
-  raw: "From: x\r\nContent-Type: text/plain\r\n\r\nYour code is 482915.\r\n--b1--",
+  raw: "From: x\r\nContent-Type: multipart/alternative; boundary=b1\r\n\r\n--b1\r\nContent-Type: text/plain\r\n\r\nYour code is 482915.\r\n--b1--",
   otp: "482915",
   magicLink: "https://app.example.com/verify?token=abc",
   auth: { result: "verified" },
@@ -168,4 +170,110 @@ test("an email from an older Worker, without fromAddress or auth, still works", 
   const view = emailView(email, trustOf(email, {}), body);
   assert.equal(view.from, "bounces+123@em.app.example.com");
   assert.equal(view.trust.auth, "unknown");
+});
+
+// Bodies: each part decoded for its own Content-Transfer-Encoding and charset.
+const crlf = (...lines) => lines.join("\r\n");
+const bodyOf = (raw) => cleanBody(extractBody(raw));
+
+test("a quoted-printable part is decoded, wherever its Content-Transfer-Encoding sits", () => {
+  const after = crlf(
+    "From: noreply@example.com",
+    "Content-Type: multipart/alternative; boundary=b1",
+    "",
+    "--b1",
+    "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: quoted-printable",
+    "",
+    "Caf=C3=A9 code 482913. Verify: https://app.example.com/verify?token=3Dab12cd=",
+    "34ef",
+    "--b1",
+    "Content-Type: text/html; charset=utf-8",
+    "",
+    "<p>not this one</p>",
+    "--b1--",
+  );
+  const expected = "Café code 482913. Verify: https://app.example.com/verify?token=ab12cd34ef";
+  assert.equal(bodyOf(after), expected);
+  const before = after.replace(
+    "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable",
+    "Content-Transfer-Encoding: quoted-printable\r\nContent-Type: text/plain; charset=utf-8",
+  );
+  assert.equal(bodyOf(before), expected);
+});
+
+test("a 7bit part is left as sent, and a signature line doesn't end it", () => {
+  const raw = crlf(
+    "Content-Type: multipart/alternative; boundary=b2",
+    "",
+    "--b2",
+    "Content-Type: text/plain; charset=us-ascii",
+    "Content-Transfer-Encoding: 7bit",
+    "",
+    "Sign in: https://app.example.com/login?token=ab12cd34ef",
+    "-- ",
+    "The team",
+    "--b2--",
+  );
+  assert.equal(bodyOf(raw), "Sign in: https://app.example.com/login?token=ab12cd34ef\n-- \nThe team");
+});
+
+test("a base64 part is read as UTF-8, and a folded Content-Type's charset counts", () => {
+  const text = "Your code is 482913 — it expires in 10 minutes.";
+  const b64 = crlf(
+    "Content-Type: multipart/mixed; boundary=b3",
+    "",
+    "--b3",
+    "Content-Transfer-Encoding: base64",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "",
+    ...Buffer.from(text, "utf8").toString("base64").match(/.{1,20}/g),
+    "--b3--",
+  );
+  assert.equal(bodyOf(b64), text);
+  const latin1 = crlf(
+    "Content-Type: multipart/alternative;",
+    ' boundary="b4"',
+    "",
+    "--b4",
+    "Content-Type: text/plain;",
+    '\tcharset="iso-8859-1"',
+    "Content-Transfer-Encoding: quoted-printable",
+    "",
+    "R=E9sum=E9 confirm=E9",
+    "--b4--",
+  );
+  assert.equal(bodyOf(latin1), "Résumé confirmé");
+});
+
+test("an HTML-only email gives its words, not its MIME parts", () => {
+  const raw = crlf(
+    "Content-Type: multipart/alternative; boundary=b5",
+    "",
+    "--b5",
+    "Content-Type: text/html; charset=utf-8",
+    "Content-Transfer-Encoding: quoted-printable",
+    "",
+    "<html><head><style>p{color:red}</style></head><body><p>Your code is <b>48=",
+    "2913</b>.</p><p>Thanks &amp; welcome</p></body></html>",
+    "--b5--",
+  );
+  assert.equal(bodyOf(raw), "Your code is 482913.\nThanks & welcome");
+});
+
+test("a single-part email gives its body; a multipart one without text gives nothing", () => {
+  assert.equal(bodyOf(crlf("From: a@example.com", "Subject: Hi", "", "Your code is 482913.")), "Your code is 482913.");
+  const qp = crlf("Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: quoted-printable", "", "Caf=C3=A9");
+  assert.equal(bodyOf(qp), "Café");
+  const pdf = crlf(
+    "Content-Type: multipart/mixed; boundary=b6",
+    "",
+    "--b6",
+    "Content-Type: application/pdf",
+    "Content-Transfer-Encoding: base64",
+    "",
+    "JVBERi0=",
+    "--b6--",
+  );
+  assert.equal(bodyOf(pdf), "");
 });

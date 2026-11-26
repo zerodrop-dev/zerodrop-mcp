@@ -41,7 +41,7 @@ import {
   type StoredEmail,
 } from "./email.js";
 
-const VERSION = "0.5.0";
+const VERSION = "0.5.1";
 const BASE_URL = (process.env.ZERODROP_BASE_URL || "https://zerodrop.dev").replace(/\/+$/, "");
 const API_KEY = (process.env.ZERODROP_API_KEY || "").trim();
 const BODIES_ALLOWED = bodiesAllowed(process.env.ZERODROP_BODIES);

@@ -93,14 +93,162 @@ export function cleanBody(body: string): string {
   return stripInvisible(body).replace(/\r\n?/g, "\n").trim().slice(0, BODY_MAX);
 }
 
-// The plain-text part of a raw email, or what follows its headers.
+// At most this much of a part is decoded: enough for BODY_MAX characters of
+// text, with room for an HTML part's markup, without spending CPU on the rest
+// of a large email.
+const PART_MAX = 100_000;
+
+// The text of a raw email for an agent to read: its text/plain part; else its
+// text/html part without the markup; else the body of a single-part email.
+// Each part is decoded for its own Content-Transfer-Encoding and charset, read
+// from the part's own headers wherever they sit among them, as the Worker reads
+// them (zerodrop-worker, partEncoding). A multipart email without a text part
+// gives "".
 export function extractBody(raw: string): string {
   if (!raw) return "";
-  const m = raw.match(/Content-Type: text\/plain[^\r\n]*\r\n\r\n([\s\S]*?)(?:\r\n--|\r\n\r\n--)/);
-  if (m) return m[1].trim().slice(0, BODY_MAX);
-  const idx = raw.indexOf("\r\n\r\n");
-  if (idx >= 0) return raw.slice(idx + 4).trim().slice(0, BODY_MAX);
-  return "";
+  const plain = textPart(raw, "plain");
+  if (plain !== null) return plain.trim().slice(0, BODY_MAX);
+  const html = textPart(raw, "html");
+  if (html !== null) return htmlToText(html).slice(0, BODY_MAX);
+  const top = partHeaders(raw, 0);
+  if (/^multipart\//i.test(headerValue(top.headers, "Content-Type"))) return "";
+  const body = raw.slice(top.bodyStart, top.bodyStart + PART_MAX);
+  return decodeText(body, headerValue(top.headers, "Content-Transfer-Encoding"), charsetOf(top.headers))
+    .trim()
+    .slice(0, BODY_MAX);
+}
+
+// The decoded body of the first text/<subtype> part, or null without one.
+function textPart(raw: string, subtype: "plain" | "html"): string | null {
+  const m = new RegExp(`^Content-Type:[ \\t]*text/${subtype}\\b`, "im").exec(raw);
+  if (!m) return null;
+  const part = partHeaders(raw, m.index);
+  const end = Math.min(partEnd(raw, m.index, part.bodyStart), part.bodyStart + PART_MAX);
+  return decodeText(
+    raw.slice(part.bodyStart, end),
+    headerValue(part.headers, "Content-Transfer-Encoding"),
+    charsetOf(part.headers),
+  );
+}
+
+// The header block of the part whose header starts at `at`: from the line
+// after the boundary line above it (or the top of the email, for a single-part
+// email) to the blank line after it.
+function partHeaders(raw: string, at: number): { headers: string; bodyStart: number } {
+  const boundary = raw.lastIndexOf("\n--", at);
+  const start = boundary === -1 ? 0 : raw.indexOf("\n", boundary + 1) + 1;
+  const blank = /\r?\n\r?\n/g;
+  blank.lastIndex = at;
+  const m = blank.exec(raw);
+  return m
+    ? { headers: raw.slice(start, m.index), bodyStart: m.index + m[0].length }
+    : { headers: raw.slice(start), bodyStart: raw.length };
+}
+
+// Where a part's body ends: at the next line of its own boundary, or the end of
+// the email. A body line that only starts with "--", like a signature, isn't one.
+function partEnd(raw: string, at: number, bodyStart: number): number {
+  const line = raw.lastIndexOf("\n--", at);
+  if (line === -1) return raw.length;
+  const lineEnd = raw.indexOf("\n", line + 1);
+  const token = raw.slice(line + 3, lineEnd === -1 ? raw.length : lineEnd).trim();
+  const next = token ? raw.indexOf(`\n--${token}`, bodyStart - 1) : -1;
+  if (next === -1) return raw.length;
+  return raw[next - 1] === "\r" ? next - 1 : next;
+}
+
+// A header's value, unfolded, or "" without one.
+function headerValue(headers: string, name: string): string {
+  const m = new RegExp(`^${name}:[ \\t]*([^\\r\\n]*(?:\\r?\\n[ \\t][^\\r\\n]*)*)`, "im").exec(headers);
+  return m ? m[1].replace(/\r?\n[ \t]+/g, " ").trim() : "";
+}
+
+function charsetOf(headers: string): string {
+  const m = /charset\s*=\s*"?([^";\s]+)"?/i.exec(headerValue(headers, "Content-Type"));
+  return m ? m[1] : "";
+}
+
+// A part's text, decoded for its Content-Transfer-Encoding: quoted-printable
+// and base64 to bytes, read in the part's charset (UTF-8 when it names none,
+// or one this runtime doesn't know). Anything else (7bit, 8bit, binary, no
+// header) is the text as sent: decoding =XX in text that isn't
+// quoted-printable breaks links ("?token=ab12" would lose its "=ab").
+function decodeText(body: string, transferEncoding: string, charset: string): string {
+  const encoding = transferEncoding.split(/[\s;]/)[0].toLowerCase();
+  const bytes =
+    encoding === "quoted-printable" ? quotedPrintableBytes(body) : encoding === "base64" ? base64Bytes(body) : null;
+  if (!bytes) return body;
+  try {
+    return new TextDecoder(charset || "utf-8").decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+}
+
+function quotedPrintableBytes(body: string): Uint8Array {
+  const text = body.replace(/=\r?\n/g, "");
+  const encoder = new TextEncoder();
+  const bytes: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    const hex = text.slice(i + 1, i + 3);
+    if (code === 0x3d && /^[0-9A-Fa-f]{2}$/.test(hex)) {
+      bytes.push(parseInt(hex, 16));
+      i += 2;
+    } else if (code < 0x80) {
+      bytes.push(code);
+    } else {
+      // Not valid in quoted-printable, but kept rather than lost.
+      const char = String.fromCodePoint(text.codePointAt(i) ?? code);
+      bytes.push(...encoder.encode(char));
+      i += char.length - 1;
+    }
+  }
+  return Uint8Array.from(bytes);
+}
+
+function base64Bytes(body: string): Uint8Array | null {
+  let text = body.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(text)) return null;
+  text = text.replace(/=+$/, "");
+  if (text.length % 4 === 1) text = text.slice(0, -1); // cut mid-character by PART_MAX
+  try {
+    return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+const INLINE_TAGS = /<\/?(?:a|abbr|b|code|em|font|i|small|span|strong|sub|sup|u)\b[^>]*>/gi;
+
+// The words of an HTML part: no head, styles, scripts or comments; inline tags
+// dropped; line breaks for <br> and the end of a block; common entities
+// decoded; spaces collapsed. Its links aren't kept: the Worker extracts the
+// magic link.
+function htmlToText(html: string): string {
+  return html
+    .replace(/<(head|style|script)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(INLINE_TAGS, "")
+    .replace(/<br\b[^>]*>|<\/(?:p|div|tr|li|h[1-6]|table)\s*>/gi, "\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&(?:#39|apos);/gi, "'")
+    .replace(/&#(\d+);/g, (_, n: string) => codePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => codePoint(parseInt(h, 16)))
+    .replace(/&amp;/gi, "&")
+    .replace(/[ \u00a0]+/g, " ")
+    .replace(/ ?\n ?/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function codePoint(n: number): string {
+  return Number.isInteger(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "";
 }
 
 // A host with its port, lower case, an internationalized name as xn--…, from
